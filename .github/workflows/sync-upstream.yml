@@ -20,6 +20,8 @@ jobs:
 
       - name: Sync upstream code
         run: |
+          git config user.name "sync-bot"
+          git config user.email "sync-bot@users.noreply.github.com"
           git remote add upstream https://github.com/NousResearch/hermes-agent.git
           git fetch upstream main
           git merge upstream/main --no-commit --no-edit || {
