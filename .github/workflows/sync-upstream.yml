@@ -15,11 +15,10 @@ jobs:
       - name: Sync upstream changes
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
         with:
-          upstream_repository: NousResearch/hermes-agent
-          upstream_branch: main
-          target_branch: main
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          ignore_files: '.github/'
+          upstream_sync_repo: NousResearch/hermes-agent
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
           # 说明：
           # - 本仓库为纯同步仓库（无本地定制），官方更新直接 merge 到 main
-          # - 冲突时 action 会在 main 上打冲突标记并 fail，需要手动解决
+          # - 冲突时 action 会 fail 并在 main 上打冲突标记，需手动解决
