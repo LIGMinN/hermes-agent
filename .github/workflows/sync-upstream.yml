@@ -5,13 +5,12 @@ on:
     - cron: '0 8 * * *'   # 每天 08:00 UTC（北京时间 16:00）
   workflow_dispatch: {}   # 支持手动触发
 
-permissions:
-  contents: write
-  workflows: write        # 允许同步更新 .github/workflows/ 下的上游 workflow
-
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      workflows: write
     steps:
       - name: Checkout target branch
         uses: actions/checkout@v4
@@ -25,6 +24,3 @@ jobs:
           upstream_sync_branch: main
           target_sync_branch: main
           target_repo_token: ${{ secrets.GITHUB_TOKEN }}
-          # 说明：
-          # - 本仓库为纯同步仓库（无本地定制），官方更新直接 merge 到 main
-          # - 冲突时 action 会 fail 并在 main 上打冲突标记，需手动解决
