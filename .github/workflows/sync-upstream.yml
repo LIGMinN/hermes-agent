@@ -28,7 +28,7 @@ jobs:
             echo "merge 冲突，中止（需手动处理）"
             exit 1
           }
-          # 丢弃上游对 .github/ 的变更，保持本仓库的 sync workflow
-          git restore --source=HEAD -- .github
+          # 丢弃上游对 .github/ 的变更（含暂存区），保持本仓库的 sync workflow
+          git restore --staged --worktree --source=HEAD -- .github
           git commit -m "Sync upstream main ($(git log -1 --format=%h upstream/main))"
           git push origin main
