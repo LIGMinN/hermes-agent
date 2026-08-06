@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write        # 允许同步更新 .github/workflows/ 下的上游 workflow
 
 jobs:
   sync:
