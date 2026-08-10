@@ -482,6 +482,16 @@ export const $messagingTruncated = atom<boolean>(false)
 // "is there another page?" is what pagination actually needs and comes free
 // from the row count the query already returned.
 export const $sessionProfilesTruncated = atom<Record<string, boolean>>({})
+
+/** Tokens and spend per profile across ALL its sessions, not just the loaded
+ *  page — summed in SQL so a profile group's header total doesn't move when the
+ *  window does. Keyed by profile name. */
+export interface ProfileUsage {
+  cost_usd: number
+  tokens: number
+}
+
+export const $sessionProfilesUsage = atom<Record<string, ProfileUsage>>({})
 export const $sessionsLoading = atom(true)
 export const $activeSessionId = atom<string | null>(null)
 export const $selectedStoredSessionId = atom<string | null>(null)
@@ -594,6 +604,8 @@ export const setMessagingPlatformTotals = (next: Updater<Record<string, number>>
 export const setMessagingTruncated = (next: Updater<boolean>) => updateAtom($messagingTruncated, next)
 export const setSessionProfilesTruncated = (next: Updater<Record<string, boolean>>) =>
   updateAtom($sessionProfilesTruncated, next)
+export const setSessionProfilesUsage = (next: Updater<Record<string, ProfileUsage>>) =>
+  updateAtom($sessionProfilesUsage, next)
 export const setSessionsLoading = (next: Updater<boolean>) => updateAtom($sessionsLoading, next)
 export const setActiveSessionId = (next: Updater<string | null>) => updateAtom($activeSessionId, next)
 export const setActiveSessionStoredIdRotation = (next: Updater<ActiveSessionStoredIdRotation | null>) =>
@@ -602,6 +614,12 @@ export const setActiveSessionStoredIdRotation = (next: Updater<ActiveSessionStor
 // Transient: a background session finished and the user hasn't opened it since.
 // Written by session-states.ts (handleTransition), cleared here on session open.
 export const $unreadFinishedSessionIds = atom<string[]>([])
+
+export const markAllSessionsRead = () => {
+  if ($unreadFinishedSessionIds.get().length) {
+    $unreadFinishedSessionIds.set([])
+  }
+}
 
 export const setSelectedStoredSessionId = (next: Updater<string | null>) => {
   updateAtom($selectedStoredSessionId, next)

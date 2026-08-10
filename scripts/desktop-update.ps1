@@ -50,6 +50,25 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+# Foreground helpers: the script is spawned via `cmd start /min`, so its
+# WinForms window comes up backgrounded unless we explicitly claim focus --
+# and after the update we must hand focus TO the relaunched Desktop (a
+# WMI-spawned process starts unfocused). AllowSetForegroundWindow lets us
+# pass our foreground right on to the new Hermes.exe pid.
+try {
+    Add-Type -Namespace HermesHandoff -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int dwProcessId);
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@ -ErrorAction Stop
+    $script:Win32 = $true
+} catch { $script:Win32 = $false }
+# Render UTF-8 glyphs (checkmarks, arrows) correctly in our own console echo
+# too; the legacy conhost default OEM codepage shows them as mojibake.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 $HermesHome = Split-Path -Parent $InstallRoot
 $MarkerPath = Join-Path $HermesHome ".hermes-update-in-progress"
 $LogDir = Join-Path $HermesHome "logs"
@@ -100,6 +119,13 @@ function Show-ProgressWindow {
         $form.Controls.Add($bar)
         $form.Controls.Add($label)
         $form.Show()
+        # `cmd start /min` spawned us backgrounded; TopMost keeps the window
+        # above others but does not take activation. Claim it explicitly so
+        # the progress window is what the user sees during the update.
+        try {
+            $form.Activate()
+            if ($script:Win32) { [HermesHandoff.Win32]::SetForegroundWindow($form.Handle) | Out-Null }
+        } catch {}
         [System.Windows.Forms.Application]::DoEvents()
         $script:Ui = [pscustomobject]@{ Form = $form; Box = $box }
     } catch {
@@ -148,10 +174,66 @@ function Remove-MarkerIfOwned {
 function Start-DesktopRelaunch {
     if ($RelaunchExe -and (Test-Path -LiteralPath $RelaunchExe)) {
         Write-HandoffLog "relaunching desktop: $RelaunchExe"
+        # DO NOT spawn Hermes.exe as our child: Electron/Chromium calls
+        # AttachConsole(ATTACH_PARENT_PROCESS) at boot, so a Desktop launched
+        # directly from this console PowerShell latches onto OUR console --
+        # the console window then outlives the script (it can't close while
+        # an attached process lives), and closing it kills the freshly
+        # relaunched GUI with it. Create the process via WMI instead: the
+        # parent becomes WmiPrvSE.exe and there is no console to inherit or
+        # attach -- same detachment explorer.exe gives a normal launch.
+        $spawned = $false
         try {
-            Start-Process -FilePath $RelaunchExe -WorkingDirectory (Split-Path -Parent $RelaunchExe) | Out-Null
+            $workDir = Split-Path -Parent $RelaunchExe
+            $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+                CommandLine      = ('"{0}"' -f $RelaunchExe)
+                CurrentDirectory = $workDir
+            } -ErrorAction Stop
+            if ($r -and $r.ReturnValue -eq 0) {
+                Write-HandoffLog "desktop relaunched detached (pid $($r.ProcessId))"
+                $spawned = $true
+                # Hand our foreground rights to the new Desktop and focus its
+                # main window once it exists. A WMI-spawned process starts
+                # unfocused, and Windows only lets the CURRENT foreground
+                # owner (us, while the progress window is up / just closed)
+                # delegate that right. Poll briefly for the window: Electron
+                # takes a couple seconds to create it.
+                try {
+                    if ($script:Win32) {
+                        [HermesHandoff.Win32]::AllowSetForegroundWindow([int]$r.ProcessId) | Out-Null
+                        $deadline = (Get-Date).AddSeconds(20)
+                        while ((Get-Date) -lt $deadline) {
+                            $hwnd = [System.IntPtr]::Zero
+                            try {
+                                $p = Get-Process -Id $r.ProcessId -ErrorAction Stop
+                                $hwnd = $p.MainWindowHandle
+                            } catch { break }  # process died; nothing to focus
+                            if ($hwnd -ne [System.IntPtr]::Zero) {
+                                [HermesHandoff.Win32]::ShowWindow($hwnd, 9) | Out-Null  # SW_RESTORE
+                                [HermesHandoff.Win32]::SetForegroundWindow($hwnd) | Out-Null
+                                Write-HandoffLog "focused relaunched desktop window"
+                                break
+                            }
+                            Start-Sleep -Milliseconds 400
+                        }
+                    }
+                } catch {
+                    Write-HandoffLog "WARNING: could not focus relaunched desktop: $($_.Exception.Message)"
+                }
+            } else {
+                Write-HandoffLog "WARNING: WMI relaunch returned $($r.ReturnValue); falling back"
+            }
         } catch {
-            Write-HandoffLog "WARNING: desktop relaunch failed: $($_.Exception.Message)"
+            Write-HandoffLog "WARNING: WMI relaunch failed: $($_.Exception.Message); falling back"
+        }
+        if (-not $spawned) {
+            try {
+                # Fallback keeps the old behavior (console tie-in and all) --
+                # a tethered Desktop beats no Desktop.
+                Start-Process -FilePath $RelaunchExe -WorkingDirectory (Split-Path -Parent $RelaunchExe) | Out-Null
+            } catch {
+                Write-HandoffLog "WARNING: desktop relaunch failed: $($_.Exception.Message)"
+            }
         }
     }
 }
@@ -173,6 +255,15 @@ function Invoke-StreamedHermes([string]$Exe, [string[]]$HermesArgs, [string]$Tag
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # hermes update prints UTF-8 (checkmarks, arrows, box glyphs). PS 5.1
+    # defaults these readers to the OEM codepage, which mangles every
+    # multi-byte glyph into mojibake in the console AND the progress box.
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    # And ask the child to actually EMIT UTF-8: Python decides its stdio
+    # encoding from the console codepage when attached to one.
+    $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
+    $psi.EnvironmentVariables["PYTHONUTF8"] = "1"
     $psi.CreateNoWindow = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
     $outWriter = [System.IO.File]::CreateText($outFile)
