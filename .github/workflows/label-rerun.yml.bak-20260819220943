@@ -11,7 +11,9 @@ name: Label rerun
 # silently failing and leaving the reviewer stuck.
 
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
 permissions:
   actions: write
   pull-requests: read

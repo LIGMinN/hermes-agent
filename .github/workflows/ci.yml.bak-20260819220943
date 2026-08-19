@@ -15,7 +15,10 @@ name: CI
 # main-only automation uses protected environments in its own workflows.
 
 on:
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
 permissions:
   contents: read
   pull-requests: write # needed by lint (PR comment) + supply-chain review_status
